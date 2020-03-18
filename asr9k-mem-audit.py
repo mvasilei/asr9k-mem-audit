@@ -8,7 +8,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 def send_command(name, command):
-    response = subprocess.Popen(['rcomauto ' + name.strip() + ' "' + command + '"'],
+    response = subprocess.Popen(['rcomauto ' + name + ' "' + command + '"'],
                                 stdout=subprocess.PIPE,
                                 shell=True)
 
@@ -30,6 +30,26 @@ def command_set(name, xlsq):
 
     xlsq.put(cresult)
 
+def multip(devtype, workbook, xlsq, pool):
+
+    cell_format = workbook.add_format()
+    cell_format.set_text_wrap()
+
+    for p in pool:
+        p.start()
+    for p in pool:
+        queueitem = xlsq.get()
+        nodename = re.search(devtype, queueitem)
+        worksheet = workbook.get_worksheet_by_name(nodename.group(0))
+        string = re.split(devtype, queueitem)
+
+        for i in range(len(string)):
+            worksheet.set_column(i, 0, 150)
+            worksheet.write(i, 0, string[i], cell_format)
+
+    for p in pool:
+        p.join()
+
 def main():
     try:
         with open('/etc/hosts', 'r') as f:
@@ -43,35 +63,39 @@ def main():
     flag = 0
 
     workbook = xlsxwriter.Workbook('asr9k.xlsx')
-    cell_format = workbook.add_format()
-    cell_format.set_text_wrap()
 
-    pool = []
+    name = []
 
     xlsq = mp.Queue()
 
+    tens = len(lines)/10
+    ones = len(lines)%10
+
     for host in lines:
         if re.findall(devtype, host.lower()):
-            ip, name = host.split()
+            ip,node = host.split()
+            name.append(node)
+            worksheet = workbook.add_worksheet(node)
 
-            worksheet = workbook.add_worksheet(name)
-            pool.append(mp.Process(target=command_set, args=(name, xlsq)))
+    print len(name)
+    tens = len(name)/10
+    ones = len(name)%10
 
-    for p in pool:
-        p.start()
+    # Prepare the mp pool list for each set of tens
+    for i in range(tens-1, -1, -1):
+        pool = []
+        for j in range(0,10):
+            pool.append(mp.Process(target=command_set, args=(name[i*10+j], xlsq)))
 
-    for p in pool:
-        queueitem = xlsq.get()
-        nodename = re.search(devtype, queueitem)
-        worksheet = workbook.get_worksheet_by_name(nodename.group(0))
-        string = re.split(devtype,queueitem)
+        multip(devtype, workbook, xlsq, pool)
 
-        for i in range(len(string)):
-            worksheet.set_column(i, 0, 150)
-            worksheet.write(i, 0, string[i], cell_format)
+    # Prepare the mp pool list for the last nodes outside of the ten groups
+    if ones:
+        pool = []
+        for i in range (0, ones):
+            pool.append(mp.Process(target=command_set, args=(name[i], xlsq)))
 
-    for p in pool:
-        p.join()
+        multip(devtype, workbook, xlsq, pool)
 
     workbook.close()
 
